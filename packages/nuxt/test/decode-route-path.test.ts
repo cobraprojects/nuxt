@@ -2,7 +2,7 @@ import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 
 import { decodeRoutePath } from '../src/core/utils/index.ts'
-import { normalizeRouteRulePath } from '../src/core/utils/route-rules.ts'
+import { createNormalizedRouteRulesRouter, foldRouteRulePath, foldRouteRulePattern, normalizeRouteRuleKey, normalizeRouteRuleLookupPath, normalizeRouteRulePath } from '../src/core/utils/route-rules.ts'
 
 const RESERVED_RE = /[%;/?:@&=+$,#]/g
 
@@ -74,5 +74,72 @@ describe('normalizeRouteRulePath', () => {
       const encoded = '/' + segments.map(segment => encodeURIComponent(segment)).join('/')
       expect(normalizeRouteRulePath(encoded, fold)).toBe(normalizeRouteRulePath(decoded, fold))
     }), { numRuns: 1000 })
+  })
+})
+
+describe('foldRouteRulePath', () => {
+  it('lower-cases plain and percent-encoded characters', () => {
+    expect(foldRouteRulePath('/Admin/%C3%89cole')).toBe('/admin/%C3%A9cole')
+    expect(foldRouteRulePath('/%41dmin')).toBe('/admin')
+  })
+
+  it('leaves escapes without a lower-case form as written', () => {
+    expect(foldRouteRulePath('/a%2Fb/%e6%b5%8b')).toBe('/a%2Fb/%e6%b5%8b')
+    expect(foldRouteRulePath('/%zz/%C3')).toBe('/%zz/%C3')
+  })
+})
+
+describe('foldRouteRulePattern', () => {
+  it('keeps param names and backslash escapes', () => {
+    expect(foldRouteRulePattern('GET /Users/:userId/**:Rest')).toBe('get /users/:userId/**:Rest')
+    expect(foldRouteRulePattern('/N/:id(\\D+)')).toBe('/n/:id(\\D+)')
+  })
+
+  it('folds text inside constraints', () => {
+    expect(foldRouteRulePattern('/:id((?:FOO|BAR))/:Rest')).toBe('/:id((?:foo|bar))/:Rest')
+  })
+
+  it('folds character escapes of upper-case letters', () => {
+    expect(foldRouteRulePattern('/:id(\\x41\\u0042\\103\\u00C9+)')).toBe('/:id(\\x61\\x62\\x63\\xe9+)')
+    expect(foldRouteRulePattern('/:id(\\x31\\x61\\u0130\\u{41}\\1)')).toBe('/:id(\\x31\\x61\\u0130\\u{41}\\1)')
+  })
+})
+
+describe('normalizeRouteRuleKey', () => {
+  it('should normalise literal text and only percent-encode regex constraints', () => {
+    expect(normalizeRouteRuleKey('/Caf%C3%A9/:slug(caf%C3%A9)/:id(\\D+)', false)).toBe('/Café/:slug(caf%C3%A9)/:id(\\D+)')
+    expect(normalizeRouteRuleKey('/Café/:slug(Café|a b)', false)).toBe('/Café/:slug(Caf%C3%A9|a%20b)')
+    expect(normalizeRouteRuleKey('/A\\(B\\)/:x([()]+(?:A|B))/C', false)).toBe('/A\\(B\\)/:x([()]+(?:A|B))/C')
+  })
+
+  it('should fold regex constraints without folding their escapes', () => {
+    expect(normalizeRouteRuleKey('/Caf%C3%A9/:slug(Caf%C3%89)/:id(\\D+)', true)).toBe('/café/:slug(caf%C3%A9)/:id(\\D+)')
+    expect(normalizeRouteRuleKey('/A\\(B\\)/:x([()]+(?:A|B))/:y([A-Z]+)', true)).toBe('/a\\(b\\)/:x([()]+(?:a|b))/:y([a-z]+)')
+  })
+
+  it('should match lookups against regex constraints', () => {
+    for (const fold of [false, true]) {
+      const router = createNormalizedRouteRulesRouter([
+        { route: '/blog/:slug(caf%C3%A9)', data: { appMiddleware: { auth: true } } },
+        { route: '/unencoded/:slug(café)', data: { appMiddleware: { auth: true } } },
+        { route: '/x/:id(\\D+)', data: { appMiddleware: { admin: true } } },
+        { route: '/upper/:id([A-Z]+)', data: { appMiddleware: { auth: true } } },
+        { route: '/escaped/:id(\\x41+)', data: { appMiddleware: { auth: true } } },
+      ], '', fold)
+      const match = (path: string) => router.matchAll('', normalizeRouteRuleLookupPath(path, fold))
+      expect(match('/blog/café'), `fold: ${fold}`).toEqual([{ appMiddleware: { auth: true } }])
+      expect(match('/blog/caf%C3%A9'), `fold: ${fold}`).toEqual([{ appMiddleware: { auth: true } }])
+      expect(match('/unencoded/café'), `fold: ${fold}`).toEqual([{ appMiddleware: { auth: true } }])
+      expect(match('/x/abc'), `fold: ${fold}`).toEqual([{ appMiddleware: { admin: true } }])
+      expect(match('/x/123'), `fold: ${fold}`).toEqual([])
+      expect(match('/upper/ABC'), `fold: ${fold}`).toEqual([{ appMiddleware: { auth: true } }])
+      expect(match('/escaped/AAA'), `fold: ${fold}`).toEqual([{ appMiddleware: { auth: true } }])
+    }
+    const folded = createNormalizedRouteRulesRouter([
+      { route: '/upper/:id([A-Z]+)', data: { appMiddleware: { auth: true } } },
+      { route: '/escaped/:id(\\x41+)', data: { appMiddleware: { auth: true } } },
+    ], '', true)
+    expect(folded.matchAll('', normalizeRouteRuleLookupPath('/Upper/abc', true))).toEqual([{ appMiddleware: { auth: true } }])
+    expect(folded.matchAll('', normalizeRouteRuleLookupPath('/Escaped/aaa', true))).toEqual([{ appMiddleware: { auth: true } }])
   })
 })

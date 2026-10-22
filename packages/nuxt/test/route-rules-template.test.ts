@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { normalize } from 'pathe'
 import { withoutTrailingSlash } from 'ufo'
 import { describe, expect, it } from 'vitest'
+import type { Nuxt } from '@nuxt/schema'
 import { loadNuxt } from '../src/index.ts'
 import { routeRulesTemplate } from '../src/core/templates.ts'
 import type { NuxtPage } from '../schema.ts'
@@ -77,6 +78,48 @@ describe('route rules template', () => {
     const matcher = new Function('defu', code)(defu) as (path: string) => Record<string, any>
     expect(matcher('/admin/users')).toEqual({ appMiddleware: { auth: true, admin: true }, ssr: false })
     expect(matcher('/lower/page')).toEqual({ ssr: false })
+  })
+
+  it('applies `appMiddleware` from rules with regex constraints', async () => {
+    const contents = await getRouteRulesTemplate(false, undefined, {
+      '/blog/:slug(caf%C3%A9)': { appMiddleware: 'auth' },
+      '/unencoded/:slug(café)': { appMiddleware: 'auth' },
+      '/x/:id(\\D+)': { appMiddleware: 'admin' },
+      '/upper/:id([A-Z]+)': { appMiddleware: 'auth' },
+      '/escaped/:id(\\x41+)': { appMiddleware: 'auth' },
+    })
+    const code = contents
+      .replace(/^import \{ defu \} from .*$/m, '')
+      .replace(/^import routerOptions from .*$/m, 'const routerOptions = {}')
+      .replace('export default', 'return')
+    const { defu } = await import('defu')
+    const matcher = new Function('defu', code)(defu) as (path: string) => Record<string, any>
+    expect(matcher('/blog/café').appMiddleware).toEqual({ auth: true })
+    expect(matcher('/Blog/caf%C3%A9').appMiddleware).toEqual({ auth: true })
+    expect(matcher('/unencoded/café').appMiddleware).toEqual({ auth: true })
+    expect(matcher('/x/abc').appMiddleware).toEqual({ admin: true })
+    expect(matcher('/x/123')).not.toHaveProperty('appMiddleware')
+    expect(matcher('/upper/ABC').appMiddleware).toEqual({ auth: true })
+    expect(matcher('/escaped/AAA').appMiddleware).toEqual({ auth: true })
+  })
+
+  it('applies `appMiddleware` from rules with unencoded regex constraints read from the config', async () => {
+    const nuxt = {
+      options: {
+        app: { baseURL: '/' },
+        router: { options: {} },
+        routeRules: { '/blog/:slug(café)': { appMiddleware: 'auth' } },
+      },
+    } as unknown as Nuxt
+    const contents = await routeRulesTemplate.getContents!({ nuxt, app: undefined!, options: routeRulesTemplate.options! })
+    const code = contents
+      .replace(/^import \{ defu \} from .*$/m, '')
+      .replace(/^import routerOptions from .*$/m, 'const routerOptions = {}')
+      .replace('export default', 'return')
+    const { defu } = await import('defu')
+    const matcher = new Function('defu', code)(defu) as (path: string) => Record<string, any>
+    expect(matcher('/blog/café').appMiddleware).toEqual({ auth: true })
+    expect(matcher('/blog/caf%C3%A9').appMiddleware).toEqual({ auth: true })
   })
 })
 

@@ -7,7 +7,7 @@ import { resolveModulePath } from 'exsolve'
 import { createMatcherFromFind } from 'h3/rules'
 import { compileRouteRules } from 'h3/rules/compiler'
 import type { Nitro, NitroConfig } from 'nitro/types'
-import { foldRouteRulePath, foldRouteRulePattern, normalizeLegacyRouteRules, routeRulesCaseFoldPlugin } from '../src/route-rules.ts'
+import { normalizeLegacyRouteRules, routeRulesCaseFoldPlugin } from '../src/route-rules.ts'
 
 vi.mock('@nuxt/kit/internal', () => ({
   bundlerDiagnostics: { NUXT_B7026: vi.fn() },
@@ -63,29 +63,6 @@ describe('normalizeLegacyRouteRules', () => {
     expect(() => normalizeLegacyRouteRules(undefined)).not.toThrow()
     expect(() => normalizeLegacyRouteRules({})).not.toThrow()
     expect(() => normalizeLegacyRouteRules({ '/x': {} })).not.toThrow()
-  })
-})
-
-describe('foldRouteRulePath', () => {
-  it('lower-cases plain and percent-encoded characters', () => {
-    expect(foldRouteRulePath('/Admin/%C3%89cole')).toBe('/admin/%C3%A9cole')
-    expect(foldRouteRulePath('/%41dmin')).toBe('/admin')
-  })
-
-  it('leaves escapes without a lower-case form as written', () => {
-    expect(foldRouteRulePath('/a%2Fb/%e6%b5%8b')).toBe('/a%2Fb/%e6%b5%8b')
-    expect(foldRouteRulePath('/%zz/%C3')).toBe('/%zz/%C3')
-  })
-})
-
-describe('foldRouteRulePattern', () => {
-  it('keeps param names and backslash escapes', () => {
-    expect(foldRouteRulePattern('GET /Users/:userId/**:Rest')).toBe('get /users/:userId/**:Rest')
-    expect(foldRouteRulePattern('/N/:id(\\D+)')).toBe('/n/:id(\\D+)')
-  })
-
-  it('folds text inside constraints', () => {
-    expect(foldRouteRulePattern('/:id((?:FOO|BAR))/:Rest')).toBe('/:id((?:foo|bar))/:Rest')
   })
 })
 
@@ -145,10 +122,16 @@ describe('routeRulesCaseFoldPlugin', () => {
   })
 
   it('matches constraints regardless of casing', async () => {
-    const match = await loadMatcher({ '/x/:id((?:FOO|BAR))': { headers: { 'x-id': '1' } } })
+    const match = await loadMatcher({
+      '/x/:id((?:FOO|BAR))': { headers: { 'x-id': '1' } },
+      '/y/:id(\\x41+)': { headers: { 'x-id': '2' } },
+    })
 
     for (const path of ['/x/FOO', '/x/foo', '/X/Bar']) {
       expect(match(path).headers, path).toEqual({ 'x-id': '1' })
+    }
+    for (const path of ['/y/AAA', '/y/aaa', '/Y/aA']) {
+      expect(match(path).headers, path).toEqual({ 'x-id': '2' })
     }
   })
 

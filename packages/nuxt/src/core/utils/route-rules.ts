@@ -91,6 +91,122 @@ export function normalizeRouteRulePath (path: string, fold: boolean): string {
 }
 
 /**
+ * Split a route pattern into its literal text and its regex constraint groups, in order.
+ */
+function splitRouteConstraints (pattern: string): Array<{ text: string, constraint: boolean }> {
+  const parts: Array<{ text: string, constraint: boolean }> = []
+  let start = 0
+  let depth = 0
+  let inClass = false
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i]
+    if (char === '\\') {
+      i++
+      continue
+    }
+    if (depth === 0) {
+      if (char === '(') {
+        parts.push({ text: pattern.slice(start, i), constraint: false })
+        start = i
+        depth = 1
+      }
+      continue
+    }
+    if (inClass) {
+      inClass = char !== ']'
+    } else if (char === '[') {
+      inClass = true
+    } else if (char === '(') {
+      depth++
+    } else if (char === ')' && --depth === 0) {
+      parts.push({ text: pattern.slice(start, i + 1), constraint: true })
+      start = i + 1
+    }
+  }
+  parts.push({ text: pattern.slice(start), constraint: depth > 0 })
+  return parts
+}
+
+const ROUTE_KEY_ENCODE_RE = /[\0-\x20"#<>`]|[^\0-\x7E]/gu
+const LONE_SURROGATE_RE = /[\uD800-\uDFFF]/u
+
+/**
+ * Percent-encode a route pattern the way h3 normalizes route rule keys, leaving existing escapes intact.
+ *
+ * @internal
+ */
+export function encodeRoutePattern (pattern: string): string {
+  return pattern.replace(ROUTE_KEY_ENCODE_RE, char => encodeURIComponent(char.replace(LONE_SURROGATE_RE, '\uFFFD')))
+}
+
+/**
+ * Lower-case a request path for case-insensitive route rule matching. Percent-encoded
+ * characters are folded too, so `/%C3%89cole` folds to `/%C3%A9cole`.
+ *
+ * Inlined by source into the server bundle, so it must not reference anything outside itself.
+ *
+ * @internal
+ */
+export function foldRouteRulePath (path: string): string {
+  return path.replace(/(?:%[\da-f]{2})+|[^%]+/gi, (run) => {
+    if (run[0] !== '%') { return run.toLowerCase() }
+    try {
+      const decoded = decodeURIComponent(run)
+      const folded = decoded.toLowerCase()
+      return folded === decoded ? run : encodeURIComponent(folded)
+    } catch {
+      return run
+    }
+  })
+}
+
+/**
+ * Lower-case a route rule pattern as {@link foldRouteRulePath} does a request path, keeping
+ * param names and escapes other than character escapes (such as `\D` in a constraint) as written.
+ *
+ * @internal
+ */
+export function foldRouteRulePattern (pattern: string): string {
+  let depth = 0
+  return pattern.replace(/\\(?:x[\da-fA-F]{2}|u[\da-fA-F]{4}|[0-3][0-7]{2})|\\.|:\w+|[^\\:()]+|[:()]/g, (token) => {
+    if (token === '(') {
+      depth++
+    } else if (token === ')') {
+      depth = Math.max(0, depth - 1)
+    }
+    if (token[0] === '\\') { return token.length > 2 ? foldCharEscape(token) : token }
+    return token[0] === ':' && depth === 0 ? token : foldRouteRulePath(token)
+  })
+}
+
+function foldCharEscape (escape: string): string {
+  const code = escape[1] === 'x' || escape[1] === 'u' ? Number.parseInt(escape.slice(2), 16) : Number.parseInt(escape.slice(1), 8)
+  const char = String.fromCharCode(code)
+  const folded = char.toLowerCase()
+  if (folded === char || folded.length !== 1) { return escape }
+  const hex = folded.charCodeAt(0).toString(16)
+  return folded.charCodeAt(0) <= 0xFF ? `\\x${hex.padStart(2, '0')}` : `\\u${hex.padStart(4, '0')}`
+}
+
+/**
+ * Normalise a route-rule key like {@link normalizeRouteRulePath}, except for its regex
+ * constraints. rou3 tests a constraint against the encoded path segment, so constraints are
+ * percent-encoded the way h3 encodes route-rule keys, never decoded, and folded with
+ * {@link foldRouteRulePattern}.
+ *
+ * @internal
+ */
+export function normalizeRouteRuleKey (key: string, fold: boolean): string {
+  return splitRouteConstraints(key)
+    .map((part) => {
+      if (!part.constraint) { return normalizeRouteRulePath(part.text, fold) }
+      const encoded = encodeRoutePattern(part.text)
+      return fold ? foldRouteRulePattern(encoded) : encoded
+    })
+    .join('')
+}
+
+/**
  * Normalise a lookup path like {@link normalizeRouteRulePath}, then percent-encode it the way
  * rou3 encodes the literal text of the keys it is matched against.
  *
@@ -220,7 +336,7 @@ export const normalizePathCode: string = [
 ].join('\n')
 
 /**
- * Build a route-rules router whose keys are decoded (and, when `fold` is set, lower-cased),
+ * Build a route-rules router whose keys are normalised with {@link normalizeRouteRuleKey},
  * mirroring the normalised lookup path used at runtime.
  *
  * `onDuplicate` is called when two distinct keys normalise onto the same path; the later
@@ -232,7 +348,7 @@ export function createNormalizedRouteRulesRouter (routes: RouteRulesRoute[], bas
   const normalizedKeys = new Map<string, string>()
   const normalizedRoutes = resolveMethodRouteRulesRoutes(routes, method).map((route) => {
     if (typeof route.route !== 'string') { return route }
-    const path = normalizeRouteRulePath(route.route, fold)
+    const path = normalizeRouteRuleKey(route.route, fold)
     const key = route.method ? `${route.method} ${path}` : path
     const original = route.method ? `${route.method} ${route.route}` : route.route
     const existing = normalizedKeys.get(key)
