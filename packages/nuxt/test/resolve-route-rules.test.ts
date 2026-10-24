@@ -51,6 +51,13 @@ describe('resolveRouteRules', () => {
     expect(resolveRouteRules(matcher, '/Y/Admin', true)).toEqual({ ssr: false })
   })
 
+  it('should match uppercase character escapes in regex constraints case-insensitively when folding', () => {
+    const matcher = createMatcher({ '/escaped/:id(\\x41+)': { prerender: true } })
+    expect(resolveRouteRules(matcher, '/escaped/AAA', true)).toEqual({ prerender: true })
+    expect(resolveRouteRules(matcher, '/Escaped/aaa', true)).toEqual({ prerender: true })
+    expect(resolveRouteRules(matcher, '/escaped/123', true)).toEqual({})
+  })
+
   it('should match uppercase text in regex constraints by case when not folding', () => {
     const matcher = createMatcher({ '/x/:id([A-Z]+)': { prerender: true } }, false)
     expect(resolveRouteRules(matcher, '/x/ABC', false)).toEqual({ prerender: true })

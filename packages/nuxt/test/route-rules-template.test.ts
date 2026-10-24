@@ -61,6 +61,16 @@ describe('route rules template', () => {
     expect(matcher('/z/A1').appMiddleware).toEqual({ admin: true })
     expect(matcher('/z/AB').appMiddleware).toBeUndefined()
   })
+
+  it('applies `appMiddleware` on a character-escape regex constraint when case-insensitive', async () => {
+    const contents = await getRouteRulesTemplate(false, {
+      '/escaped/:id(\\x41+)': { appMiddleware: 'auth' },
+    })
+    const matcher = await evaluateMatcher(contents)
+    expect(matcher('/escaped/AAA').appMiddleware).toEqual({ auth: true })
+    expect(matcher('/Escaped/aaa').appMiddleware).toEqual({ auth: true })
+    expect(matcher('/escaped/123').appMiddleware).toBeUndefined()
+  })
 })
 
 async function evaluateMatcher (contents: string) {

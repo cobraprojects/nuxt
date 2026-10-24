@@ -86,6 +86,15 @@ describe('normalizeRouteRuleKey', () => {
     expect(normalizeRouteRuleKey('/X/:id([A-Z]\\D+)', false)).toBe('/X/:id([A-Z]\\D+)')
   })
 
+  it('should fold character escapes of uppercase letters to their lowercase form', () => {
+    expect(normalizeRouteRuleKey('/:id(\\x41+)', true)).toBe('/:id(\\x61+)')
+    expect(normalizeRouteRuleKey('/:id(\\u0041+)', true)).toBe('/:id(\\u0061+)')
+    expect(normalizeRouteRuleKey('/:id(\\101+)', true)).toBe('/:id(\\141+)')
+    expect(normalizeRouteRuleKey('/:id(\\400+)', true)).toBe('/:id(\\400+)')
+    expect(normalizeRouteRuleKey('/:id(\\u0130+)', true)).toBe('/:id(\\u0130+)')
+    expect(normalizeRouteRuleKey('/:id(\\x41|\\D|\\1)', true)).toBe('/:id(\\x61|\\D|\\1)')
+  })
+
   it('should treat escaped and bracketed parentheses as part of their group', () => {
     expect(normalizeRouteRuleKey('/A\\(B/:id([)]A)C', true)).toBe('/a\\(b/:id([)]a)c')
     expect(normalizeRouteRuleKey('/A/:id(\\)A)B', true)).toBe('/a/:id(\\)a)b')

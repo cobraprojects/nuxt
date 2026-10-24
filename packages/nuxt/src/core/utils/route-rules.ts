@@ -53,17 +53,32 @@ export function normalizeRouteRuleKey (key: string, fold: boolean): string {
     .map((part) => {
       if (!part.constraint) { return normalizeRouteRulePath(part.text, fold) }
       const decoded = decodeRouteConstraint(part.text)
-      return fold ? decoded.replace(CONSTRAINT_TOKEN_RE, token => token[0] === '\\' ? token : token.toLowerCase()) : decoded
+      return fold ? decoded.replace(CONSTRAINT_TOKEN_RE, token => token[0] === '\\' ? foldCharacterEscape(token) ?? token : token.toLowerCase()) : decoded
     })
     .join('')
 }
 
 const ENCODED_RUN_RE = /(?:%[\da-f]{2})+/gi
 const REGEX_SYNTAX_RE = /[\\^$.*+?()[\]{}|-]/g
-const CONSTRAINT_TOKEN_RE = /\\p\{[^}]*\}|\\[\s\S]?|[^\\]+/gi
+const CONSTRAINT_TOKEN_RE = /\\[pP]\{[^}]*\}|\\\\|\\x[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}|\\[0-3][0-7]{2}|\\[\s\S]?|[^\\]+/g
 
 function decodeRouteConstraint (constraint: string): string {
   return constraint.replace(ENCODED_RUN_RE, encoded => decodeRoutePath(encoded).replace(REGEX_SYNTAX_RE, '\\$&'))
+}
+
+function foldCharacterEscape (token: string): string | null {
+  const escaped = token[1]
+  if (!escaped) { return null }
+  let radix = 8
+  if (escaped === 'x' || escaped === 'u') { radix = 16 } else if (escaped < '0' || escaped > '7') { return null }
+
+  const value = Number.parseInt(token.slice(radix === 16 ? 2 : 1), radix)
+  const char = String.fromCharCode(value)
+  const lower = char.toLowerCase()
+  if (lower.length !== 1 || lower === char) { return null }
+
+  const width = escaped === 'x' ? 2 : escaped === 'u' ? 4 : 3
+  return `${token.slice(0, radix === 16 ? 2 : 1)}${lower.charCodeAt(0).toString(radix).padStart(width, '0')}`
 }
 
 function splitRouteConstraints (pattern: string): Array<{ text: string, constraint: boolean }> {
